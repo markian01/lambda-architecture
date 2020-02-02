@@ -1,4 +1,6 @@
-from pyspark.sql.functions import window, lit, approx_count_distinct, col
+from pyspark.sql.functions import (
+    window, lit, approx_count_distinct,
+    col, count, to_date)
 from pyspark.sql.window import Window
 from pyspark.sql.types import ArrayType, TimestampType
 
@@ -21,24 +23,26 @@ def main():
 
     # streaming stats
     windowed_submissions = submission_stream \
-        .groupby(window('created_utc', '5 minutes', '3 minutes')) \
+        .groupby(window('created_utc', '5 seconds', '5 seconds')) \
         .count() \
         .withColumn('window', col('window')['end']) \
-        .withColumnRenamed('count', 'submissions_last_5_mins')
+        .withColumn('date', to_date('window'))
         
     windowed_comments = comment_stream \
-        .groupby(window('created_utc', '5 minutes', '3 minutes')) \
+        .groupby(window('created_utc', '5 seconds', '5 seconds')) \
         .count() \
         .withColumn('window', col('window')['end']) \
-        .withColumnRenamed('count', 'comments_last_5_mins')
+        .withColumn('date', to_date('window'))
 
     windowed_unique_active_subreddits = submission_stream \
         .select('created_utc', 'subreddit') \
         .union(comment_stream.select('created_utc', 'subreddit')) \
-        .groupby(window('created_utc', '5 minutes', '3 minutes')) \
-        .agg(approx_count_distinct('subreddit')) \
+        .groupby(window('created_utc', '5 seconds', '5 seconds')) \
+        .agg(approx_count_distinct('subreddit'), count('subreddit')) \
         .withColumn('window', col('window')['end']) \
-        .withColumnRenamed('approx_count_distinct(subreddit)', 'active_subreddits')
+        .withColumn('date', to_date('window')) \
+        .withColumnRenamed('approx_count_distinct(subreddit)', 'active_subreddits') \
+        .withColumnRenamed('count(subreddit)', 'submissions_and_comments')
 
     # persist streaming stats to cassandra
     stream_to_cassandra(windowed_submissions, 'windowed_submissions')
