@@ -148,6 +148,22 @@ services:
       - ./schema/schema_generator.py:/app/schema_generator.py
       - ./spark-batch-process:/app
 
+  dash:
+    build: ./dash
+    container_name: dash
+    ports:
+      - 8050:8050
+    networks:
+      - net
+    environment:
+      - DASH_DEBUG_MODE=True
+      - CASSANDRA_HOST=cassandra
+      - CASSANDRA_PORT=9042
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./init/wait-for-init.sh:/wait-for-init.sh
+      - ./dash:/app
+
 volumes:
   hadoop_namenode:
   hadoop_datanode:
