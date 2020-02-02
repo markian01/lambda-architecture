@@ -1,0 +1,153 @@
+version: "3"
+
+
+networks:
+  net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.22.0.0/24
+
+
+services:
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:5.4.0
+    container_name: zookeeper
+    ports: 
+      - 2181:2181
+    networks: 
+      - net
+    environment: 
+      - ZOOKEEPER_CLIENT_PORT=2181
+  
+  kafka:
+    image: confluentinc/cp-kafka:5.4.0
+    container_name: kafka
+    ports: 
+      - 9092:9092
+    networks: 
+      - net
+    environment: 
+      - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+    depends_on: 
+      - zookeeper
+
+  spark-master:
+    image: bde2020/spark-master:2.4.4-hadoop2.7
+    container_name: spark-master
+    ports:
+      - 8080:8080
+      - 7077:7077
+    networks:
+      - net
+
+  spark-worker:
+    image: bde2020/spark-worker:2.4.4-hadoop2.7
+    ports:
+      - 8081
+    networks: 
+      - net
+    environment:
+      - SPARK_MASTER=spark://spark-master:7077
+    depends_on:
+      - spark-master
+
+  cassandra:
+    image: datastax/dse-server:6.7.0
+    container_name: cassandra
+    ports:
+      - 9042:9042
+    networks:
+      - net
+    environment: 
+      - DS_LICENSE=accept
+    volumes:
+      - ./init/cassandra-init.sh:/cassandra-init.sh
+    entrypoint: /cassandra-init.sh
+
+  namenode:
+    image: bde2020/hadoop-namenode:2.0.0-hadoop3.1.3-java8
+    container_name: namenode
+    ports:
+      - 9870:9870
+      - 9000:9000
+    networks: 
+      - net
+    environment:
+      - CLUSTER_NAME=cluster_1
+    volumes:
+      - hadoop_namenode:/hadoop/dfs/name
+    command: /run.sh && hdfs dfs -mkdir /data /checkpoint /write-offset
+    env_file:
+      - ./init/hadoop.env
+
+  datanode:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.1.3-java8
+    container_name: datanode
+    ports:
+      - 9864:9864
+    networks: 
+      - net
+    environment:
+      - SERVICE_PRECONDITION=namenode:9870
+    volumes:
+      - hadoop_datanode:/hadoop/dfs/data
+    env_file:
+      - ./init/hadoop.env
+
+  kafka-stream-ingest:
+    build: ./kafka-stream-ingest
+    container_name: kafka-stream-ingest
+    networks: 
+      - net
+    environment: 
+      - KAFKA_SOCKET=kafka:9092
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./init/wait-for-init.sh:/wait-for-init.sh
+      - ./schema/schema_generator.py:/app/schema_generator.py
+      - ./kafka-stream-ingest:/app
+
+  spark-stream-process:
+    build: ./spark-stream-process
+    container_name: spark-stream-process
+    networks: 
+      - net
+    environment: 
+      - ENABLE_INIT_DAEMON=false
+      - SPARK_SUBMIT_ARGS=--packages org.apache.spark:spark-sql-kafka-0-10_2.11:2.4.4,com.datastax.spark:spark-cassandra-connector_2.11:2.4.2 --total-executor-cores 2
+      - KAFKA_SOCKET=kafka:9092
+      - CASSANDRA_HOST=cassandra
+      - HDFS_DATA=hdfs://namenode:9000/data
+      - HDFS_CHECKPOINT=hdfs://namenode:9000/checkpoint
+    volumes: 
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./init/wait-for-init.sh:/wait-for-init.sh
+      - ./schema/schema_generator.py:/app/schema_generator.py
+      - ./spark-stream-process:/app
+
+  spark-batch-process:
+    build: ./spark-batch-process
+    container_name: spark-batch-process
+    networks: 
+      - net
+    environment: 
+      - ENABLE_INIT_DAEMON=false
+      - SPARK_SUBMIT_ARGS=--packages com.datastax.spark:spark-cassandra-connector_2.11:2.4.2 --total-executor-cores 2
+      - CASSANDRA_HOST=cassandra
+      - NAMENODE_SOCKET=namenode:9870
+      - HDFS_DATA=hdfs://namenode:9000/data
+      - HDFS_CHECKPOINT=hdfs://namenode:9000/checkpoint
+      - HDFS_WRITE_OFFSET=hdfs://namenode:9000/write-offset
+    volumes: 
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./init/wait-for-init.sh:/wait-for-init.sh
+      - ./schema/schema_generator.py:/app/schema_generator.py
+      - ./spark-batch-process:/app
+
+volumes:
+  hadoop_namenode:
+  hadoop_datanode:

@@ -1,0 +1,10 @@
+FROM python:3.6
+
+RUN apt-get -yqq update && apt-get -yqq install docker.io
+RUN mkdir /logs
+
+WORKDIR /app
+ADD ./ ./
+RUN pip install -r requirements.txt
+
+CMD sh /wait-for-init.sh && sh produce.sh
